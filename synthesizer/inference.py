@@ -65,7 +65,7 @@ class Synthesizer:
         self._model.eval()
 
         if self.verbose:
-            print("Loaded synthesizer \"%s\" trained to step %d" % (self.model_fpath.name, self._model.state_dict()["step"]))
+            print("Loaded synthesizer \"%s\" trained to step %d" % (str(self.model_fpath), self._model.state_dict()["step"]))
 
     def synthesize_spectrograms(self, texts: List[str],
                                 embeddings: Union[np.ndarray, List[np.ndarray]],
@@ -105,7 +105,7 @@ class Synthesizer:
         specs = []
         for i, batch in enumerate(batched_inputs, 1):
             if self.verbose:
-                print(f"\n| Generating {i}/{len(batched_inputs)}")
+                print(f"Generating {i}/{len(batched_inputs)}")
 
             # Pad texts so they are all the same length
             text_lens = [len(text) for text in batch]
@@ -130,7 +130,7 @@ class Synthesizer:
                 specs.append(m)
 
         if self.verbose:
-            print("\n\nDone.\n")
+            print("Done.")
         return (specs, alignments) if return_alignments else specs
 
     @staticmethod
