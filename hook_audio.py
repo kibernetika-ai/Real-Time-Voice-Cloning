@@ -1,7 +1,7 @@
+import base64
 import io
 import logging
 
-import cv2
 import librosa
 from ml_serving.utils import helpers
 import numpy as np
@@ -98,6 +98,8 @@ def process(inputs, ctx, **kwargs):
     audio_gen: AudioGen = ctx.global_ctx
 
     audio_bytes = helpers.get_param(inputs, 'audio', raw_bytes=True)
+    if isinstance(audio_bytes, str):
+        audio_bytes = base64.decodebytes(audio_bytes.encode())
     text = helpers.get_param(inputs, 'text')
 
     generated_speech = audio_gen.generate_speech(audio_bytes, text)
