@@ -1,6 +1,8 @@
 import base64
 import io
 import logging
+import time
+import uuid
 
 import librosa
 from ml_serving.utils import helpers
@@ -20,6 +22,12 @@ PARAMS = {
 }
 
 
+class CachedVector:
+    def __init__(self, vector, time):
+        self.vector = vector
+        self.time = time
+
+
 class AudioGen:
     def __init__(self, encoder, vocoder, synthesizer):
         self.synthesizer = Synthesizer(synthesizer)
@@ -27,6 +35,8 @@ class AudioGen:
         voc_inference.load_model(vocoder)
 
         self.speaker_embedding_size = 256
+        self.keep_cache_sec = 3600
+        self.cache = {}
 
         self.test()
 
@@ -47,16 +57,18 @@ class AudioGen:
         voc_inference.infer_waveform(mel, target=200, overlap=50, progress_callback=no_action)
         print("All test passed! You can now synthesize speech.\n\n")
 
-    def generate_speech(self, speech_example_bytes, text):
+    def get_embedding(self, speech_example_bytes):
         bytes_io = io.BytesIO(speech_example_bytes)
 
         original_wav, sampling_rate = librosa.load(bytes_io)
         preprocessed_wav = enc_inference.preprocess_wav(original_wav, sampling_rate)
 
         embed = enc_inference.embed_utterance(preprocessed_wav)
+        return embed
 
-        texts = [text]
+    def synthesize(self, embed, text):
         embeds = [embed]
+        texts = [text]
         # If you know what the attention layer alignments are, you can retrieve them here by
         # passing return_alignments=True
         specs = self.synthesizer.synthesize_spectrograms(texts, embeds)
@@ -66,6 +78,7 @@ class AudioGen:
         # spectrogram, the more time-efficient the vocoder.
         def progress(i, seq_len, b_size, gen_rate):
             pass
+
         generated_wav = voc_inference.infer_waveform(spec, progress_callback=progress)
 
         generated_wav = np.pad(generated_wav, (0, self.synthesizer.sample_rate), mode="constant")
@@ -83,6 +96,31 @@ class AudioGen:
         )
         return audio_bytes.getvalue()
 
+    def generate_speech(self, speech_example_bytes, text):
+        embed = self.get_embedding(speech_example_bytes)
+
+        return self.synthesize(embed, text)
+
+    def cache_vector(self, vector):
+        vector_id = str(uuid.uuid4())
+        LOG.info(f'[Cache] New vector ID={vector_id}')
+        self.cache[vector_id] = CachedVector(vector, time.time())
+        self._invalidate_cache()
+        return vector_id
+
+    def get_cached_vector(self, key):
+        result = self.cache[key]
+        self._invalidate_cache()
+        return result.vector
+
+    def _invalidate_cache(self):
+        keys = list(self.cache.keys())
+        now = time.time()
+        for key in keys:
+            if now - self.cache[key].time >= self.keep_cache_sec:
+                LOG.info(f'[Cache] Expired vector ID={key}')
+                del self.cache[key]
+
 
 def init_hook(ctx, **params):
     PARAMS.update(params)
@@ -97,11 +135,26 @@ def init_hook(ctx, **params):
 def process(inputs, ctx, **kwargs):
     audio_gen: AudioGen = ctx.global_ctx
 
+    speech_id = helpers.get_param(inputs, 'speech_id')
+    generate_speech = helpers.boolean_string(
+        helpers.get_param(inputs, 'generate_speech', default=True)
+    )
     audio_bytes = helpers.get_param(inputs, 'audio', raw_bytes=True)
     if isinstance(audio_bytes, str):
         audio_bytes = base64.decodebytes(audio_bytes.encode())
     text = helpers.get_param(inputs, 'text')
 
-    generated_speech = audio_gen.generate_speech(audio_bytes, text)
-    result = {'audio': generated_speech}
+    if audio_bytes is not None and len(audio_bytes) > 0:
+        vector = audio_gen.get_embedding(audio_bytes)
+        speech_id = audio_gen.cache_vector(vector)
+    else:
+        vector = audio_gen.get_cached_vector(speech_id)
+
+    result = {'speech_id': speech_id}
+
+    # Generate speech from speech_id
+    if generate_speech:
+        generated_speech = audio_gen.synthesize(vector, text)
+        result['audio'] = generated_speech
+
     return result
