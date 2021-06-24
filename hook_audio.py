@@ -1,8 +1,11 @@
 import base64
 import io
 import logging
+import re
+import subprocess
 import time
 import uuid
+import tempfile
 
 import librosa
 from ml_serving.utils import helpers
@@ -20,6 +23,7 @@ PARAMS = {
     'encoder': None,
     'synthesizer': None,
 }
+SR_REGEX = re.compile('([0-9]+) Hz')
 
 
 class CachedVector:
@@ -57,11 +61,32 @@ class AudioGen:
         voc_inference.infer_waveform(mel, target=200, overlap=50, progress_callback=no_action)
         print("All test passed! You can now synthesize speech.\n\n")
 
-    def get_embedding(self, speech_example_bytes):
-        bytes_io = io.BytesIO(speech_example_bytes)
+    def _save_tmp(self, bytes_):
+        fname = tempfile.mktemp(suffix='.wav')
+        with open(fname, 'wb') as f:
+            f.write(bytes_)
 
-        original_wav, sampling_rate = librosa.load(bytes_io)
-        preprocessed_wav = enc_inference.preprocess_wav(original_wav, sampling_rate)
+        return fname
+
+    def _get_sample_rate(self, fname):
+        pipe = subprocess.Popen(
+            ['ffprobe', '-hide_banner', fname],
+            stderr=subprocess.PIPE,
+        )
+        output = pipe.stderr.read().decode()
+        pipe.communicate()
+        groups = re.findall(SR_REGEX, output)
+        if len(groups) < 1:
+            raise RuntimeError('Can not estimate sample rate for file. Please ensure that file is correct.')
+
+        return int(groups[0])
+
+    def get_embedding(self, speech_example_bytes):
+        fname = self._save_tmp(speech_example_bytes)
+        sample_rate = self._get_sample_rate(fname)
+
+        original_wav, sampling_rate = librosa.load(fname, sr=sample_rate)
+        preprocessed_wav = enc_inference.preprocess_wav(original_wav, sampling_rate, trim_silence=False)
 
         embed = enc_inference.embed_utterance(preprocessed_wav)
         return embed
