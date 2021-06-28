@@ -39,7 +39,7 @@ class AudioGen:
         voc_inference.load_model(vocoder)
 
         self.speaker_embedding_size = 256
-        self.keep_cache_sec = 3600
+        self.keep_cache_sec = 86400
         self.cache = {}
 
         self.test()
@@ -86,7 +86,7 @@ class AudioGen:
         sample_rate = self._get_sample_rate(fname)
 
         original_wav, sampling_rate = librosa.load(fname, sr=sample_rate)
-        preprocessed_wav = enc_inference.preprocess_wav(original_wav, sampling_rate, trim_silence=False)
+        preprocessed_wav = enc_inference.preprocess_wav(original_wav, sampling_rate, trim_silence=True)
 
         embed = enc_inference.embed_utterance(preprocessed_wav)
         return embed
